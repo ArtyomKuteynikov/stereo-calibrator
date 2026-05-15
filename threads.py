@@ -168,6 +168,59 @@ class DualCamThread(QThread):
         self.wait(5000)
 
 
+class StereoSingleCamThread(QThread):
+    """Feed from a single stereo camera that outputs a side-by-side frame.
+    Opens the camera at double width (e.g. 3840×1080) with MJPG codec,
+    splits the frame in half and emits left/right — same signal interface
+    as DualCamThread for drop-in compatibility.
+    """
+    frames_ready = pyqtSignal(object, object)   # left BGR, right BGR
+    focal_lengths_ready = pyqtSignal(float, float)
+    camera_error = pyqtSignal(str)
+
+    STEREO_W = 3840
+    STEREO_H = 1080
+
+    def __init__(self, idx: int):
+        super().__init__()
+        self.idx = idx
+        self._running = False
+        self._stop_requested = False
+
+    def run(self):
+        cap = cv2.VideoCapture(self.idx, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            self.camera_error.emit(f"Не удалось открыть стереокамеру {self.idx}")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.STEREO_W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.STEREO_H)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+
+        self.focal_lengths_ready.emit(0.0, 0.0)
+        self._running = True
+        consecutive_failures = 0
+        while self._running:
+            ret, frame = cap.read()
+            if ret:
+                consecutive_failures = 0
+                w_half = frame.shape[1] // 2
+                self.frames_ready.emit(frame[:, :w_half].copy(),
+                                       frame[:, w_half:].copy())
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= 30:
+                    self.camera_error.emit(
+                        f"Стереокамера {self.idx} перестала отвечать")
+                    break
+            self.msleep(33)
+        cap.release()
+
+    def stop(self):
+        self._stop_requested = True
+        self._running = False
+        self.wait(5000)
+
+
 class CalibThread(QThread):
     """Run full stereo calibration pipeline in background.
 

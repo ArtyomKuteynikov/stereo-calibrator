@@ -63,9 +63,8 @@ class CalibrationApp(QMainWindow):
 
     def _go_calibrate(self, selected_pairs: list):
         l_data = self.sel_page.left_combo.currentData()
-        r_data = self.sel_page.right_combo.currentData()
         l_idx = l_data if l_data is not None else 0
-        r_idx = r_data if r_data is not None else 1
+        r_idx = self.sel_page.get_r_idx()
         self.res_page.start_calibration(
             l_idx, r_idx, self._pending_cb, self._pending_sq_m, selected_pairs
         )

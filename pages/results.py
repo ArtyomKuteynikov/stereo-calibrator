@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import cv2
@@ -10,7 +11,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 
-from threads import CalibThread, DualCamThread
+from threads import CalibThread, DualCamThread, StereoSingleCamThread
 from utils import bgr_to_pixmap, clear_capture_dirs
 
 
@@ -301,13 +302,22 @@ class ResultsPage(QWidget):
         return "\n".join(rows)
 
     def _start_rectified_preview(self):
-        self._cam_thread = DualCamThread(self._l_idx, self._r_idx)
+        self._last_rect_t = 0.0
+        if self._r_idx == -1:
+            self._cam_thread = StereoSingleCamThread(self._l_idx)
+        else:
+            self._cam_thread = DualCamThread(self._l_idx, self._r_idx)
         self._cam_thread.frames_ready.connect(self._on_rect_frames)
         self._cam_thread.camera_error.connect(
             lambda msg: self.calib_status.setText(f"Ошибка камеры: {msg}"))
         self._cam_thread.start()
 
     def _on_rect_frames(self, fL, fR):
+        now = time.time()
+        if now - self._last_rect_t < 0.10:
+            return
+        self._last_rect_t = now
+
         if self._result is None:
             return
         m = self._result

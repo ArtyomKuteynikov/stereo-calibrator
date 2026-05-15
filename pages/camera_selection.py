@@ -3,10 +3,11 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGridLayout, QLabel, QComboBox,
     QPushButton, QSpinBox, QDoubleSpinBox, QGroupBox, QMessageBox,
+    QRadioButton, QButtonGroup, QHBoxLayout,
 )
 
 from config import CAPTURE_DIR
-from threads import SingleCamThread, CameraDetectThread
+from threads import SingleCamThread, CameraDetectThread, StereoSingleCamThread
 from utils import bgr_to_pixmap
 
 
@@ -20,6 +21,7 @@ class CameraSelectionPage(QWidget):
         self._cameras: list = []
         self._left_thread: SingleCamThread | None = None
         self._right_thread: SingleCamThread | None = None
+        self._stereo_thread: StereoSingleCamThread | None = None
         self._left_loaded = False
         self._right_loaded = False
         self._spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -71,16 +73,32 @@ class CameraSelectionPage(QWidget):
 
         root.addWidget(sg)
 
+        mg = QGroupBox("Режим камеры")
+        ml = QHBoxLayout(mg)
+        self._mode_dual = QRadioButton("Два отдельных устройства")
+        self._mode_stereo = QRadioButton("Стереокамера (единое устройство)")
+        self._mode_dual.setChecked(True)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.addButton(self._mode_dual)
+        self._mode_group.addButton(self._mode_stereo)
+        ml.addWidget(self._mode_dual)
+        ml.addWidget(self._mode_stereo)
+        ml.addStretch()
+        self._mode_group.buttonClicked.connect(self._on_mode_changed)
+        root.addWidget(mg)
+
         cg = QGroupBox("Выбор камер")
         cl = QGridLayout(cg)
 
-        cl.addWidget(QLabel("Левая камера:"), 0, 0, Qt.AlignRight)
+        self._left_cam_label = QLabel("Левая камера:")
+        cl.addWidget(self._left_cam_label, 0, 0, Qt.AlignRight)
         self.left_combo = QComboBox()
         self.left_combo.setMinimumWidth(150)
         self.left_combo.currentIndexChanged.connect(self._on_left_changed)
         cl.addWidget(self.left_combo, 0, 1)
 
-        cl.addWidget(QLabel("Правая камера:"), 0, 2, Qt.AlignRight)
+        self._right_cam_label = QLabel("Правая камера:")
+        cl.addWidget(self._right_cam_label, 0, 2, Qt.AlignRight)
         self.right_combo = QComboBox()
         self.right_combo.setMinimumWidth(150)
         self.right_combo.currentIndexChanged.connect(self._on_right_changed)
@@ -151,6 +169,40 @@ class CameraSelectionPage(QWidget):
         if self._left_loaded and self._right_loaded:
             self._prev_spinner_timer.stop()
 
+    @property
+    def is_stereo_mode(self) -> bool:
+        return self._mode_stereo.isChecked()
+
+    def get_r_idx(self) -> int:
+        """Returns -1 in stereo mode, otherwise the right combo's camera index."""
+        if self.is_stereo_mode:
+            return -1
+        data = self.right_combo.currentData()
+        return data if data is not None else 1
+
+    def _on_mode_changed(self):
+        stereo = self.is_stereo_mode
+        self._right_cam_label.setVisible(not stereo)
+        self.right_combo.setVisible(not stereo)
+        if stereo:
+            self._left_cam_label.setText("Стереокамера:")
+            self.right_prev.setText("← Правый глаз\n(из стереокамеры)")
+        else:
+            self._left_cam_label.setText("Левая камера:")
+        self.stop_previews()
+        self._left_loaded = False
+        self._right_loaded = False
+        idx = self.left_combo.currentData()
+        if idx is not None:
+            if stereo:
+                self._start_stereo_preview(idx)
+            else:
+                self._start_left_preview(idx)
+                r_idx = self.right_combo.currentData()
+                if r_idx is not None:
+                    self._start_right_preview(r_idx)
+        self._update_start_btn()
+
     def detect_cameras(self):
         self._spinner_idx = 0
         self._spinner_timer.start()
@@ -176,12 +228,14 @@ class CameraSelectionPage(QWidget):
         if len(cameras) >= 2:
             self.right_combo.setCurrentIndex(1)
 
-        self.status_lbl.setText(f"Найдено камер: {len(cameras)}. Выберите левую и правую.")
-        self.start_btn.setEnabled(len(cameras) >= 2)
-
-        self._start_left_preview(cameras[0][0])
-        if len(cameras) >= 2:
-            self._start_right_preview(cameras[1][0])
+        if self.is_stereo_mode:
+            self.status_lbl.setText(f"Найдено камер: {len(cameras)}. Выберите стереокамеру.")
+            self._start_stereo_preview(cameras[0][0])
+        else:
+            self.status_lbl.setText(f"Найдено камер: {len(cameras)}. Выберите левую и правую.")
+            self._start_left_preview(cameras[0][0])
+            if len(cameras) >= 2:
+                self._start_right_preview(cameras[1][0])
 
     def _start_left_preview(self, idx: int):
         if self._left_thread:
@@ -211,6 +265,30 @@ class CameraSelectionPage(QWidget):
                          self._check_cameras_ready()))
         self._right_thread.start()
 
+    def _start_stereo_preview(self, idx: int):
+        if self._stereo_thread:
+            self._stereo_thread.stop()
+        self._left_loaded = False
+        self._right_loaded = False
+        self._set_nav_enabled(False)
+        self.left_prev.setText("⠋  Загрузка\nстереокамеры…")
+        self.right_prev.setText("⠋  Ожидание\nстереокамеры…")
+        self._prev_spinner_timer.start()
+        self._stereo_thread = StereoSingleCamThread(idx)
+        self._stereo_thread.frames_ready.connect(self._show_stereo_frames)
+        self._stereo_thread.camera_error.connect(
+            lambda msg: (self.left_prev.setText(f"Ошибка:\n{msg}"),
+                         self.right_prev.setText(f"Ошибка:\n{msg}"),
+                         self._check_cameras_ready()))
+        self._stereo_thread.start()
+
+    def _show_stereo_frames(self, left_frame, right_frame):
+        self._left_loaded = True
+        self._right_loaded = True
+        self.left_prev.setPixmap(bgr_to_pixmap(left_frame, 340, 255))
+        self.right_prev.setPixmap(bgr_to_pixmap(right_frame, 340, 255))
+        self._check_cameras_ready()
+
     def _show_left(self, frame):
         self._left_loaded = True
         self.left_prev.setPixmap(bgr_to_pixmap(frame, 340, 255))
@@ -226,16 +304,24 @@ class CameraSelectionPage(QWidget):
             self.start_btn.setEnabled(False)
             self.existing_btn.setEnabled(False)
 
+    def _update_start_btn(self):
+        if self.is_stereo_mode:
+            self.start_btn.setEnabled(len(self._cameras) >= 1)
+        else:
+            self.start_btn.setEnabled(len(self._cameras) >= 2)
+
     def _check_cameras_ready(self):
         if self._left_loaded and self._right_loaded:
-            if len(self._cameras) >= 2:
-                self.start_btn.setEnabled(True)
+            self._update_start_btn()
             self._update_existing_btn()
 
     def _on_left_changed(self, _):
         idx = self.left_combo.currentData()
         if idx is not None:
-            self._start_left_preview(idx)
+            if self.is_stereo_mode:
+                self._start_stereo_preview(idx)
+            else:
+                self._start_left_preview(idx)
 
     def _on_right_changed(self, _):
         idx = self.right_combo.currentData()
@@ -243,11 +329,12 @@ class CameraSelectionPage(QWidget):
             self._start_right_preview(idx)
 
     def stop_previews(self):
-        for t in (self._left_thread, self._right_thread):
+        for t in (self._left_thread, self._right_thread, self._stereo_thread):
             if t:
                 t.stop()
         self._left_thread = None
         self._right_thread = None
+        self._stereo_thread = None
 
     def _update_existing_btn(self):
         left_count = len(list((CAPTURE_DIR / "left").glob("*.jpg"))) if (CAPTURE_DIR / "left").exists() else 0
@@ -270,9 +357,10 @@ class CameraSelectionPage(QWidget):
 
     def _on_start(self):
         l_idx = self.left_combo.currentData()
-        r_idx = self.right_combo.currentData()
-        if l_idx == r_idx:
-            QMessageBox.warning(self, "Одна камера", "Левая и правая камеры должны быть разными устройствами.")
+        r_idx = self.get_r_idx()
+        if not self.is_stereo_mode and l_idx == r_idx:
+            QMessageBox.warning(self, "Одна камера",
+                                "Левая и правая камеры должны быть разными устройствами.")
             return
         target = self.target_spin.value()
         sq_cols = self.cb_cols.value()

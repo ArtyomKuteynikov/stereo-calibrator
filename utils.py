@@ -112,10 +112,10 @@ def make_zone_map_pixmap(covered_zones: dict, cell: int = 30) -> QPixmap:
 
 
 def bgr_to_pixmap(frame: np.ndarray, w: int, h: int) -> QPixmap:
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    fh, fw, ch = rgb.shape
-    qi = QImage(rgb.data.tobytes(), fw, fh, ch * fw, QImage.Format_RGB888)
-    return QPixmap.fromImage(qi).scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    small = cv2.resize(frame, (w, h))
+    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    qi = QImage(rgb.data.tobytes(), w, h, 3 * w, QImage.Format_RGB888)
+    return QPixmap.fromImage(qi)
 
 
 def make_ref_checkerboard(sq_cols: int, sq_rows: int, sq_px: int = 80) -> np.ndarray:

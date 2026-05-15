@@ -13,7 +13,7 @@ from config import (
     CAPTURE_DIR, COUNTDOWN_SECS, COOLDOWN_SECS,
     STATE_IDLE, STATE_COUNTDOWN, STATE_COOLDOWN,
 )
-from threads import DualCamThread
+from threads import DualCamThread, StereoSingleCamThread
 from utils import bgr_to_pixmap, make_ref_checkerboard, make_zone_map_pixmap, analyze_board_placement
 
 
@@ -219,7 +219,10 @@ class CapturePage(QWidget):
         )
         QTimer.singleShot(50, self._resize_ref)
 
-        self._cam_thread = DualCamThread(l_idx, r_idx)
+        if r_idx == -1:
+            self._cam_thread = StereoSingleCamThread(l_idx)
+        else:
+            self._cam_thread = DualCamThread(l_idx, r_idx)
         self._cam_thread.frames_ready.connect(self._on_frames)
         self._cam_thread.focal_lengths_ready.connect(self._on_focal_lengths)
         self._cam_thread.camera_error.connect(
@@ -243,7 +246,10 @@ class CapturePage(QWidget):
         self._last_detect = 0.0
         self.countdown_lbl.setText("")
         self._set_detect_status(False, False)
-        self._cam_thread = DualCamThread(self._l_idx, self._r_idx)
+        if self._r_idx == -1:
+            self._cam_thread = StereoSingleCamThread(self._l_idx)
+        else:
+            self._cam_thread = DualCamThread(self._l_idx, self._r_idx)
         self._cam_thread.frames_ready.connect(self._on_frames)
         self._cam_thread.focal_lengths_ready.connect(self._on_focal_lengths)
         self._cam_thread.camera_error.connect(
@@ -283,8 +289,8 @@ class CapturePage(QWidget):
             return
         self._last_detect = now
 
-        flags = cv2.CALIB_CB_FAST_CHECK
         CB = (self._cb[0], self._cb[1])
+        flags = cv2.CALIB_CB_FAST_CHECK
         retL, cL = cv2.findChessboardCorners(fL, CB, None, flags=flags)
         retR, cR = cv2.findChessboardCorners(fR, CB, None, flags=flags)
 
@@ -317,7 +323,6 @@ class CapturePage(QWidget):
 
         both = retL and retR
         self._advance_state(both, fL, fR)
-        time.sleep(0.05)
 
     def _advance_state(self, both: bool, fL: np.ndarray, fR: np.ndarray):
         now = time.time()
